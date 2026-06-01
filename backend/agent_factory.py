@@ -9,7 +9,18 @@ from openai import OpenAI
 from tools import TOOL_CATALOG
 from tools.database_tool import DB_SCHEMA
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+_client: OpenAI | None = None
+
+
+def _get_client() -> OpenAI:
+    """Build the OpenAI client lazily on first use (see agent_runner._get_client)."""
+    global _client
+    if _client is None:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        _client = OpenAI(api_key=key)
+    return _client
 
 FACTORY_SYSTEM_PROMPT = """You are an expert AI agent architect. Given a user's description of what they want an agent to do, generate a complete agent configuration as JSON.
 
@@ -58,7 +69,7 @@ async def generate_agent_config(user_description: str) -> dict:
         db_schema=DB_SCHEMA,
     )
 
-    response = client.chat.completions.create(
+    response = _get_client().chat.completions.create(
         model="gpt-5",
         response_format={"type": "json_object"},
         messages=[

@@ -19,7 +19,7 @@ class AgentModel(Base):
     name = Column(String, nullable=False, unique=True)
     description = Column(Text, nullable=False)
     system_prompt = Column(Text, nullable=False)
-    model = Column(String, nullable=False, default="claude-sonnet-4-6")
+    model = Column(String, nullable=False, default="gpt-4o-mini")
     tools = Column(JSON, nullable=False, default=list)
     reasoning = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

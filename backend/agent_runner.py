@@ -8,7 +8,24 @@ from typing import AsyncGenerator
 from openai import OpenAI
 from tools import execute_tool, get_tools_for_agent
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+_client: OpenAI | None = None
+
+
+def _get_client() -> OpenAI:
+    """Build the OpenAI client lazily on first use.
+
+    Deferring construction past import time means (a) a missing key no longer
+    crashes the whole app at boot, and (b) credentials injected into os.environ
+    during FastAPI startup (from the DB) are picked up.
+    """
+    global _client
+    if _client is None:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+        _client = OpenAI(api_key=key)
+    return _client
+
 
 DEFAULT_MODEL = "gpt-4o-mini"
 MAX_ITERATIONS = 10
@@ -58,7 +75,7 @@ async def run_agent_task(
             kwargs["tools"] = oai_tools
             kwargs["tool_choice"] = "auto"
 
-        response = client.chat.completions.create(**kwargs)
+        response = _get_client().chat.completions.create(**kwargs)
         msg = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
 
@@ -116,7 +133,7 @@ def run_conversation_turn(
             kwargs["tools"] = oai_tools
             kwargs["tool_choice"] = "auto"
 
-        response = client.chat.completions.create(**kwargs)
+        response = _get_client().chat.completions.create(**kwargs)
         msg = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
 

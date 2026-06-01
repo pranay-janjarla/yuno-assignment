@@ -358,7 +358,7 @@ def _mask(value: str) -> str:
     return value[:4] + "••••" + value[-4:]
 
 
-@app.get("/api/credentials", dependencies=[Depends(require_api_key)])
+@app.get("/api/credentials")
 def get_credentials(db: Session = Depends(get_db)):
     env = _read_env_file()
     result = []
