@@ -536,7 +536,6 @@ function WorkflowBuilder({ workflowId }: { workflowId: string }) {
         type: "triggerNode",
         position: { x: 80, y: 160 },
         data: { label: "Start" },
-        deletable: false,
       }])
     } else {
       api.getWorkflow(workflowId).then(wf => {
@@ -581,6 +580,17 @@ function WorkflowBuilder({ workflowId }: { workflowId: string }) {
           model: agent.model,
           status: "idle",
         },
+      }])
+      setSaved(false)
+      return
+    }
+
+    if (e.dataTransfer.getData("application/triggernode")) {
+      setNodes(nds => [...nds, {
+        id: `trigger-${Date.now()}`,
+        type: "triggerNode",
+        position,
+        data: { label: "Start" },
       }])
       setSaved(false)
       return
@@ -1337,7 +1347,7 @@ Content-Type: application/json
                 )}
               </div>
 
-              {["agentNode", "telegramTriggerNode", "sendTelegramNode", "webhookTriggerNode", "webhookResponseNode"].includes(selectedNode.type ?? "") && (
+              {["triggerNode", "agentNode", "telegramTriggerNode", "sendTelegramNode", "webhookTriggerNode", "webhookResponseNode"].includes(selectedNode.type ?? "") && (
                 <div className="px-4 py-3 border-t border-[#F3F3F5]">
                   <button
                     onClick={() => removeNode(selectedNode.id)}
