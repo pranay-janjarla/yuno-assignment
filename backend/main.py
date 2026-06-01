@@ -905,10 +905,13 @@ async def _run_workflow_stream(nodes: list, edges: list, task: str, agents: dict
         if node_type == "sendTelegramNode":
             template = str(node.get("data", {}).get("messageTemplate", "")).strip()
             message = template if template else last_output
-            # When triggered by the bot, skip the direct send — the bot delivers the reply itself
+            # When triggered by the bot, skip the direct API send — the bot delivers
+            # the reply itself. Emit the node's message as a `text` event so the bot's
+            # /chat endpoint captures it as the final answer (honoring messageTemplate).
             if from_bot:
-                yield sse("node_done", node_id=node_id, message="(Telegram delivery handled by bot)")
                 last_output = message
+                yield sse("text", node_id=node_id, message=message)
+                yield sse("node_done", node_id=node_id, message="(Telegram delivery handled by bot)")
                 continue
             chat_id = str(node.get("data", {}).get("chatId", "")).strip()
             cred_key = str(node.get("data", {}).get("chatIdCredential", "")).strip()
