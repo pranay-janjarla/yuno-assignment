@@ -191,10 +191,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:  # workflow
                 r = await client.post(
                     f"{API_BASE}/api/workflows/{session['id']}/chat",
-                    json={"message": user_text},
+                    json={"message": user_text, "chat_id": str(chat_id)},
                 )
                 if r.status_code == 200:
-                    response_text = r.json().get("response", "Workflow completed.")
+                    data = r.json()
+                    response_text = data.get("response", "Workflow completed.")
+                    # A Send-to-Telegram node already pushed the reply to this chat.
+                    # Clear the 'Thinking…' placeholder and skip re-delivery so the
+                    # user isn't double-messaged.
+                    if data.get("delivered"):
+                        try:
+                            await thinking_msg.delete()
+                        except Exception:
+                            pass
+                        return
                 else:
                     response_text = "Workflow failed. Please try again."
 

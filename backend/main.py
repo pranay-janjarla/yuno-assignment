@@ -168,6 +168,7 @@ class AgentChatRequest(BaseModel):
 
 class WorkflowChatRequest(BaseModel):
     message: str
+    chat_id: Optional[str] = None
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -291,10 +292,11 @@ async def chat_workflow(wf_id: str, body: WorkflowChatRequest, db: Session = Dep
     run_id = str(uuid.uuid4())
 
     final_answer = ""
+    delivered = False
     async for raw in _run_workflow_with_tracking(
         wf.nodes, wf.edges, body.message, agents,
         run_id=run_id, workflow_id=wf_id, workflow_name=wf.name,
-        trigger_source="telegram", from_bot=True,
+        trigger_source="telegram", from_bot=True, bot_chat_id=body.chat_id,
     ):
         if not raw.startswith("data: "):
             continue
@@ -304,12 +306,16 @@ async def chat_workflow(wf_id: str, body: WorkflowChatRequest, db: Session = Dep
             continue
         if evt.get("type") == "text":
             final_answer = evt.get("message", final_answer)
+        if evt.get("delivered"):
+            delivered = True
         if evt.get("type") == "done":
             if not final_answer:
                 final_answer = evt.get("message", "")
             break
 
-    return {"response": final_answer or "Workflow completed.", "run_id": run_id}
+    # `delivered` is True when a Send-to-Telegram node already pushed the reply
+    # to the chat; the bot then skips its own re-delivery to avoid double messages.
+    return {"response": final_answer or "Workflow completed.", "run_id": run_id, "delivered": delivered}
 
 
 @app.get("/api/tools")
@@ -750,6 +756,7 @@ async def _run_workflow_with_tracking(
     nodes: list, edges: list, task: str, agents: dict,
     run_id: str, workflow_id: str, workflow_name: str,
     trigger_source: str = "app", from_bot: bool = False,
+    bot_chat_id: Optional[str] = None,
 ):
     """Wraps _run_workflow_stream: creates a DB run record and saves events on completion."""
     node_map = {n["id"]: n for n in nodes}
@@ -788,7 +795,7 @@ async def _run_workflow_with_tracking(
 
     status = "completed"
     try:
-        async for chunk in _run_workflow_stream(nodes, edges, task, agents, run_id=run_id, from_bot=from_bot):
+        async for chunk in _run_workflow_stream(nodes, edges, task, agents, run_id=run_id, from_bot=from_bot, bot_chat_id=bot_chat_id):
             yield chunk
     except Exception as exc:
         status = "failed"
@@ -851,7 +858,7 @@ async def _send_telegram(chat_id: str, text: str) -> bool:
     return True
 
 
-async def _run_workflow_stream(nodes: list, edges: list, task: str, agents: dict, run_id: Optional[str] = None, from_bot: bool = False):
+async def _run_workflow_stream(nodes: list, edges: list, task: str, agents: dict, run_id: Optional[str] = None, from_bot: bool = False, bot_chat_id: Optional[str] = None):
     def sse(type_: str, **kwargs) -> str:
         event = {"type": type_, **kwargs}
         if run_id:
@@ -905,22 +912,27 @@ async def _run_workflow_stream(nodes: list, edges: list, task: str, agents: dict
         if node_type == "sendTelegramNode":
             template = str(node.get("data", {}).get("messageTemplate", "")).strip()
             message = template if template else last_output
-            # When triggered by the bot, skip the direct API send — the bot delivers
-            # the reply itself. Emit the node's message as a `text` event so the bot's
-            # /chat endpoint captures it as the final answer (honoring messageTemplate).
-            if from_bot:
-                last_output = message
-                yield sse("text", node_id=node_id, message=message)
-                yield sse("node_done", node_id=node_id, message="(Telegram delivery handled by bot)")
-                continue
+            last_output = message
+            # Emit the message as a `text` event so callers that read the stream
+            # (e.g. the bot's /chat endpoint) capture it as the final answer,
+            # honoring any configured messageTemplate.
+            yield sse("text", node_id=node_id, message=message)
+
+            # Resolve the destination chat. When the bot triggered this run we
+            # reply to the originating chat; otherwise use the node's config.
             chat_id = str(node.get("data", {}).get("chatId", "")).strip()
             cred_key = str(node.get("data", {}).get("chatIdCredential", "")).strip()
             if cred_key:
                 chat_id = os.environ.get(cred_key, chat_id)
+            if from_bot and bot_chat_id:
+                chat_id = str(bot_chat_id)
+
             yield sse("node_start", node_id=node_id, message="Sending to Telegram...")
             ok = await _send_telegram(chat_id, message)
             if ok:
-                yield sse("node_done", node_id=node_id, message="Sent to Telegram")
+                # `delivered` tells the bot the reply already reached the chat,
+                # so it won't re-deliver the same text and double-message the user.
+                yield sse("node_done", node_id=node_id, message="Sent to Telegram", delivered=True)
             else:
                 yield sse("error", node_id=node_id, message="Failed to send Telegram message (check chat ID and bot token)")
             continue
