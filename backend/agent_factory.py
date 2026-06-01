@@ -70,7 +70,9 @@ async def generate_agent_config(user_description: str) -> dict:
     )
 
     response = _get_client().chat.completions.create(
-        model="gpt-5",
+        # Overridable via env so you can switch to gpt-4o etc. without a redeploy
+        # if your key lacks access to the default model.
+        model=os.environ.get("AGENT_FACTORY_MODEL", "gpt-5"),
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},

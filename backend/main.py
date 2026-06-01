@@ -171,7 +171,14 @@ async def generate_config(body: GenerateRequest):
     """
     if not body.description.strip():
         raise HTTPException(400, "Description cannot be empty")
-    config = await generate_agent_config(body.description)
+    try:
+        config = await generate_agent_config(body.description)
+    except RuntimeError as e:
+        # OPENAI_API_KEY missing — the server isn't configured to talk to OpenAI.
+        raise HTTPException(503, f"{e}. Set OPENAI_API_KEY in the server environment.")
+    except Exception as e:
+        # OpenAI API errors (invalid key, model access, rate limit) — surface a readable message.
+        raise HTTPException(502, f"Agent generation failed: {e}")
     return config
 
 
@@ -370,7 +377,10 @@ def get_credentials(db: Session = Depends(get_db)):
     result = []
     # System credentials
     for d in CREDENTIAL_DEFS:
-        raw = env.get(d["key"], "")
+        # Prefer the live process env (Railway dashboard vars / loaded .env) over the
+        # .env file, so platform credentials are recognized whether they're set in the
+        # host environment or a file. This is what the OpenAI client actually reads.
+        raw = os.environ.get(d["key"]) or env.get(d["key"], "")
         result.append({
             **d,
             "is_set": bool(raw),
