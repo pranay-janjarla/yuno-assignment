@@ -1,13 +1,21 @@
-from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer
+import os
+from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.dialects.sqlite import JSON
 from datetime import datetime
 import uuid
 
-DATABASE_URL = "sqlite:///./agents.db"
+# Postgres on Railway (DATABASE_URL set in the dashboard); SQLite locally by default.
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./agents.db")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# SQLAlchemy 2.0 rejects the legacy "postgres://" scheme some providers emit.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
+engine = create_engine(DATABASE_URL, connect_args=_connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -86,7 +94,8 @@ def get_db():
 
 def init_db():
     Base.metadata.create_all(bind=engine)
-    _migrate_schema()
+    if _is_sqlite:
+        _migrate_schema()  # SQLite-only ALTER; Postgres gets the column from create_all
     _seed_payments_data()
 
 
