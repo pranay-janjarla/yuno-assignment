@@ -112,24 +112,24 @@ See `.env.example` for the full list with descriptions.
    web: uvicorn main:app --host 0.0.0.0 --port $PORT
    ```
 4. Add all variables from `.env.example` in the Railway **Variables** tab — never commit `.env`
-5. Set `ALLOWED_ORIGINS=https://your-app.netlify.app` (your Netlify URL)
+5. Set `ALLOWED_ORIGINS=https://your-app.vercel.app` (your Vercel URL)
 
-### Frontend → Netlify
+### Frontend → Vercel
 
-1. New Netlify site → **Import from GitHub** → set **Base directory** to `frontend/`
-2. `netlify.toml` is pre-configured (build command + Next.js plugin)
-3. In Netlify **Environment Variables**, add:
+1. New Vercel project → **Import** your GitHub repo → set **Root Directory** to `frontend/`
+2. `vercel.json` pins the Next.js framework preset; Vercel auto-detects the build & output settings
+3. In Vercel **Environment Variables**, add:
    ```
    NEXT_PUBLIC_API_URL=https://your-backend.railway.app
    ```
-4. First deploy: run `npm install @netlify/plugin-nextjs` locally inside `frontend/` and commit the updated `package.json`
+4. Deploy — Vercel builds and serves the Next.js app on every push to `main`
 
 ### Production checklist
 
 - [ ] `OPENAI_API_KEY` set in Railway
 - [ ] `API_SECRET_KEY` set to a random string in Railway
-- [ ] `ALLOWED_ORIGINS` set to your Netlify URL in Railway
-- [ ] `NEXT_PUBLIC_API_URL` set to your Railway URL in Netlify
+- [ ] `ALLOWED_ORIGINS` set to your Vercel URL in Railway
+- [ ] `NEXT_PUBLIC_API_URL` set to your Railway URL in Vercel
 - [ ] `TELEGRAM_BOT_TOKEN` set (if using Telegram)
 
 ---
@@ -179,7 +179,7 @@ agent-platform/
 │   ├── runtime.txt          # Python 3.11 pin for Railway
 │   └── requirements.txt
 ├── frontend/
-│   ├── netlify.toml         # Netlify build config
+│   ├── vercel.json          # Vercel framework preset (Next.js)
 │   ├── next.config.js       # NEXT_PUBLIC_API_URL passthrough
 │   └── src/app/
 │       ├── page.tsx          # Agent list
@@ -239,7 +239,7 @@ Create an adapter class with `send_message(recipient, text)` and a webhook route
 | Web search | Tavily API |
 | External channel | python-telegram-bot |
 | Database | SQLite (local dev), PostgreSQL-ready |
-| Deployment | Railway (backend), Netlify (frontend) |
+| Deployment | Railway (backend), Vercel (frontend) |
 
 ---
 
