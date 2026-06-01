@@ -109,6 +109,12 @@ def startup():
         db.close()
 
 
+@app.get("/")
+def root():
+    """Health/landing route so the base URL returns a clear status instead of 404."""
+    return {"status": "ok", "service": "Agent Platform API", "docs": "/docs"}
+
+
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
