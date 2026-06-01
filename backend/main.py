@@ -821,17 +821,34 @@ async def _run_workflow_with_tracking(
             db.close()
 
 
+# Telegram rejects any single message longer than 4096 chars.
+_TELEGRAM_MAX_CHARS = 4000
+
+
 async def _send_telegram(chat_id: str, text: str) -> bool:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not token or not chat_id:
         return False
+    text = (text or "").strip()
+    if not text:
+        return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    # Split long agent output into chunks under Telegram's 4096-char limit.
+    chunks = [text[i:i + _TELEGRAM_MAX_CHARS] for i in range(0, len(text), _TELEGRAM_MAX_CHARS)]
     async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            r = await client.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
-            return r.status_code == 200
-        except Exception:
-            return False
+        for chunk in chunks:
+            try:
+                # Try Markdown first, but agent output often contains unbalanced
+                # markup that Telegram's strict parser rejects (HTTP 400). Fall
+                # back to plain text so delivery still succeeds.
+                r = await client.post(url, json={"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"})
+                if r.status_code != 200:
+                    r = await client.post(url, json={"chat_id": chat_id, "text": chunk})
+                if r.status_code != 200:
+                    return False
+            except Exception:
+                return False
+    return True
 
 
 async def _run_workflow_stream(nodes: list, edges: list, task: str, agents: dict, run_id: Optional[str] = None, from_bot: bool = False):
