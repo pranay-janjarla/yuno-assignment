@@ -10,3 +10,4 @@ python-multipart>=0.0.9
 aiohttp>=3.9
 tavily-python>=0.3
 python-dotenv>=1.0
+python-telegram-bot>=21.0
