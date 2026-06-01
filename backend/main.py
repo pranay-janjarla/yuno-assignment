@@ -50,13 +50,22 @@ def _unsubscribe_run(run_id: str, q: Queue) -> None:
 
 app = FastAPI(title="Agent Platform")
 
-# ─── CORS — read from env so Railway/Netlify origins work ────────────────────
+# ─── CORS — read from env so Netlify/Vercel origins work ─────────────────────
+# ALLOWED_ORIGINS: comma-separated exact origins.
+# ALLOWED_ORIGIN_REGEX: optional regex matching whole origins (covers all Vercel/
+#   Netlify deploys incl. previews without listing each one). Defaults to allowing
+#   any *.vercel.app and *.netlify.app subdomain plus localhost.
 _origins_raw = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000")
 _allowed_origins = [o.strip() for o in _origins_raw.split(",") if o.strip()]
+_origin_regex = os.environ.get(
+    "ALLOWED_ORIGIN_REGEX",
+    r"https://([a-z0-9-]+\.)*(vercel|netlify)\.app|http://localhost:3000",
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "X-API-Key"],
