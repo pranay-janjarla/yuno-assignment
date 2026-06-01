@@ -21,7 +21,7 @@ from telegram.ext import (
 
 load_dotenv()
 
-API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
+API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000").rstrip("/")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # { chat_id: { "type": "agent"|"workflow", "id": str, "name": str, "history": list } }
