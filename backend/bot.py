@@ -132,6 +132,33 @@ async def handle_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
 
 
+# ─── Reply delivery ───────────────────────────────────────────────────────────
+
+# Telegram rejects any single message longer than 4096 chars; chunk below that.
+TELEGRAM_MAX_CHARS = 4000
+
+
+def _chunk(text: str, size: int = TELEGRAM_MAX_CHARS) -> list[str]:
+    text = (text or "").strip() or "Workflow completed."
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+async def deliver(thinking_msg, text: str) -> None:
+    """Replace the 'Thinking…' message with the reply, splitting long output.
+
+    Telegram caps messages at 4096 chars, so a long answer would make a single
+    edit_text raise and leave the user stuck on 'Thinking…'. Chunk and fall back
+    to fresh messages so the reply always lands.
+    """
+    chunks = _chunk(text)
+    try:
+        await thinking_msg.edit_text(chunks[0])
+    except Exception:
+        await thinking_msg.reply_text(chunks[0])
+    for chunk in chunks[1:]:
+        await thinking_msg.reply_text(chunk)
+
+
 # ─── Message handler ──────────────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -174,7 +201,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         response_text = f"Error: {e}"
 
-    await thinking_msg.edit_text(response_text)
+    await deliver(thinking_msg, response_text)
 
 
 # ─── /stop ────────────────────────────────────────────────────────────────────
