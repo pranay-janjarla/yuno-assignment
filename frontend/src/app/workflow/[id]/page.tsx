@@ -612,7 +612,7 @@ function WorkflowBuilder({ workflowId }: { workflowId: string }) {
         id: `send-telegram-${Date.now()}`,
         type: "sendTelegramNode",
         position,
-        data: { chatId: "", messageTemplate: "", label: "Send to Telegram" },
+        data: { chatId: "1277961041", messageTemplate: "", label: "Send to Telegram" },
       }])
       setSaved(false)
       return
