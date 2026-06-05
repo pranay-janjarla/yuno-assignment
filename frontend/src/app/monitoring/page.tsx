@@ -1,5 +1,6 @@
 "use client"
 import { useEffect, useRef, useState, useCallback } from "react"
+import { getToken } from "@/lib/api"
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
@@ -274,7 +275,9 @@ export default function MonitoringPage() {
 
   const fetchRuns = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/runs`)
+      const res = await fetch(`${API}/api/runs`, {
+        headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+      })
       if (res.ok) {
         const data: Run[] = await res.json()
         setRuns(data)
@@ -316,7 +319,7 @@ export default function MonitoringPage() {
     if (!run) return
 
     // Always connect to SSE stream (it handles both live and completed)
-    const es = new EventSource(`${API}/api/runs/${selectedId}/stream`)
+    const es = new EventSource(`${API}/api/runs/${selectedId}/stream?token=${encodeURIComponent(getToken() ?? "")}`)
     esRef.current = es
 
     es.onmessage = (e) => {

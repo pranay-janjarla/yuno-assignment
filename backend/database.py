@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer, JSON
+from sqlalchemy import create_engine, Column, String, Text, Boolean, DateTime, Integer, JSON, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -82,6 +82,42 @@ class RunEventModel(Base):
     message = Column(Text, default="")
     extra = Column(JSON, nullable=False, default=dict)  # tool name, inputs, etc.
     ts = Column(DateTime, default=datetime.utcnow)
+
+
+# ─── Auth: passwordless owner (biometric passkey + authenticator TOTP) ────────
+class OwnerModel(Base):
+    """Single admin record. Its existence means the app has been set up.
+    No password is ever stored — login is biometric (WebAuthn) or TOTP only."""
+    __tablename__ = "owner"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    totp_secret = Column(String, nullable=False)          # base32 authenticator secret
+    totp_enabled = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WebAuthnCredentialModel(Base):
+    """One enrolled passkey (Touch ID / Face ID / Windows Hello / security key)."""
+    __tablename__ = "webauthn_credentials"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    credential_id = Column(String, nullable=False, unique=True)  # base64url
+    public_key = Column(LargeBinary, nullable=False)             # COSE public key
+    sign_count = Column(Integer, nullable=False, default=0)
+    transports = Column(JSON, nullable=False, default=list)
+    nickname = Column(String, nullable=False, default="Passkey")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AuthSessionModel(Base):
+    """A logged-in session. Only the sha256 hash of the bearer token is stored."""
+    __tablename__ = "auth_sessions"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token_hash = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    last_used_at = Column(DateTime, default=datetime.utcnow)
 
 
 def get_db():

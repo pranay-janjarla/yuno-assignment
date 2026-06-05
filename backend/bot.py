@@ -24,6 +24,11 @@ load_dotenv()
 API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000").rstrip("/")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
+# Server-to-server auth: the backend's data endpoints now require either a logged-in
+# browser session or this service key. Set API_SECRET_KEY so the bot is authorized.
+_API_KEY = os.environ.get("API_SECRET_KEY", "")
+API_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
+
 # { chat_id: { "type": "agent"|"workflow", "id": str, "name": str, "history": list } }
 sessions: dict[int, dict] = {}
 
@@ -58,7 +63,7 @@ async def handle_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if data.startswith("cat:"):
         category = data[4:]  # "agents" or "workflows"
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{API_BASE}/api/{category}")
+            r = await client.get(f"{API_BASE}/api/{category}", headers=API_HEADERS)
         items = r.json() if r.status_code == 200 else []
 
         if not items:
@@ -104,7 +109,7 @@ async def handle_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     async with httpx.AsyncClient(timeout=10) as client:
         if kind == "a":
-            r = await client.get(f"{API_BASE}/api/agents/{item_id}")
+            r = await client.get(f"{API_BASE}/api/agents/{item_id}", headers=API_HEADERS)
             if r.status_code != 200:
                 await query.edit_message_text("Agent not found.")
                 return
@@ -118,7 +123,7 @@ async def handle_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
 
         elif kind == "w":
-            r = await client.get(f"{API_BASE}/api/workflows/{item_id}")
+            r = await client.get(f"{API_BASE}/api/workflows/{item_id}", headers=API_HEADERS)
             if r.status_code != 200:
                 await query.edit_message_text("Workflow not found.")
                 return
@@ -180,6 +185,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 r = await client.post(
                     f"{API_BASE}/api/agents/{session['id']}/chat",
                     json={"message": user_text, "history": session["history"]},
+                    headers=API_HEADERS,
                 )
                 if r.status_code == 200:
                     data = r.json()
@@ -192,6 +198,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 r = await client.post(
                     f"{API_BASE}/api/workflows/{session['id']}/chat",
                     json={"message": user_text, "chat_id": str(chat_id)},
+                    headers=API_HEADERS,
                 )
                 if r.status_code == 200:
                     data = r.json()

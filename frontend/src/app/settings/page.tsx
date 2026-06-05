@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState, useRef } from "react"
-import { api, Credential } from "@/lib/api"
+import { startRegistration } from "@simplewebauthn/browser"
+import { api, auth, clearToken, Credential } from "@/lib/api"
 
 const GROUP_ORDER = ["AI Models", "Telegram", "Yuno API", "App", "Custom"]
 const GROUP_ICONS: Record<string, string> = {
@@ -272,6 +273,90 @@ function AddCredentialModal({ onClose, onCreated }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+// ─── Security: logout + biometric passkeys ────────────────────────────────────
+function SecuritySection() {
+  const [passkeys, setPasskeys] = useState<{ id: string; nickname: string; created_at: string }[]>([])
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState("")
+
+  const load = () => auth.listPasskeys().then(setPasskeys).catch(() => {})
+  useEffect(() => { load() }, [])
+
+  async function addPasskey() {
+    setMsg(""); setBusy(true)
+    try {
+      const { state, options } = await auth.addPasskeyBegin()
+      const credential = await startRegistration({ optionsJSON: JSON.parse(options) })
+      await auth.addPasskeyComplete(state, credential)
+      await load()
+      setMsg("Biometric added on this device.")
+    } catch (e: any) {
+      setMsg(e?.message || "Could not add biometric.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removePasskey(id: string) {
+    if (!confirm("Remove this biometric device?")) return
+    try {
+      await auth.deletePasskey(id)
+      await load()
+    } catch (e: any) {
+      alert("Failed to remove: " + e.message)
+    }
+  }
+
+  async function logout() {
+    await auth.logout()
+    clearToken()
+    window.dispatchEvent(new Event("yuno-unauthorized"))
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-[#E8E8EC] overflow-hidden shadow-sm">
+      <div className="px-5 py-3 border-b border-[#F0F0F4] bg-[#FAFAFA] flex items-center gap-2">
+        <span className="text-base">🔐</span>
+        <span className="text-sm font-semibold text-[#1A1A2E]">Security</span>
+        <button
+          onClick={logout}
+          className="ml-auto text-xs font-medium text-[#DC2626] hover:underline"
+        >
+          Log out
+        </button>
+      </div>
+      <div className="px-5 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-sm font-medium text-[#1A1A2E]">Biometric devices</p>
+            <p className="text-xs text-[#9CA3AF]">Sign in with Touch ID / Face ID on each device you add.</p>
+          </div>
+          <button
+            onClick={addPasskey}
+            disabled={busy}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#534AB7] text-white hover:bg-[#4840A0] disabled:opacity-50"
+          >
+            Add this device
+          </button>
+        </div>
+        {passkeys.length === 0 ? (
+          <p className="text-xs text-[#9CA3AF]">No biometric devices yet — you can still sign in with your authenticator code.</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {passkeys.map(p => (
+              <li key={p.id} className="flex items-center justify-between text-sm bg-[#FAFAFA] rounded-lg px-3 py-2">
+                <span className="text-[#1A1A2E]">{p.nickname} <span className="text-[#9CA3AF] text-xs">· {new Date(p.created_at).toLocaleDateString()}</span></span>
+                <button onClick={() => removePasskey(p.id)} className="text-xs text-[#DC2626] hover:underline">Remove</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {msg && <p className="text-xs text-[#6B7280] mt-3">{msg}</p>}
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const [credentials, setCredentials] = useState<Credential[]>([])
   const [loading, setLoading] = useState(true)
@@ -358,6 +443,7 @@ export default function SettingsPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-5">
+          <SecuritySection />
           {grouped.map(({ group, items }) => (
             <div key={group} className="bg-white rounded-xl border border-[#E8E8EC] overflow-hidden shadow-sm">
               <div className="px-5 py-3 border-b border-[#F0F0F4] bg-[#FAFAFA] flex items-center gap-2">
