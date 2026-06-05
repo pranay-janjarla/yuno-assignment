@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import "./globals.css"
 import Link from "next/link"
 import AuthGate from "./AuthGate"
+import UserMenu from "./UserMenu"
 
 export const metadata: Metadata = {
   title: "Yuno Agent Platform",
@@ -66,10 +67,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
           <div className="flex-1" />
 
-          {/* Avatar */}
-          <div className="w-8 h-8 rounded-full bg-[#534AB7] flex items-center justify-center text-white text-xs font-bold select-none">
-            Y
-          </div>
+          {/* Avatar + account menu (log out) */}
+          <UserMenu />
         </nav>
 
         <main className="flex-1 overflow-auto">
