@@ -12,6 +12,7 @@ import secrets
 import time
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 import pyotp
 import qrcode
@@ -42,36 +43,65 @@ from database import (
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-RP_ID = os.environ.get("WEBAUTHN_RP_ID", "localhost")
 RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Yuno Agents")
-RP_ORIGIN = os.environ.get("WEBAUTHN_ORIGIN", "http://localhost:3000")
+# Optional explicit overrides; when unset we derive RP ID + origin from the
+# request's Origin header so the ceremony works on localhost, 127.0.0.1, a LAN
+# IP, or a deployed domain without manual configuration.
+RP_ID_ENV = os.environ.get("WEBAUTHN_RP_ID", "").strip()
+RP_ORIGIN_ENV = os.environ.get("WEBAUTHN_ORIGIN", "").strip()
 SESSION_TTL_DAYS = 30
+
+
+def rp_params_from_request(request: Optional[Request]) -> tuple[str, str]:
+    """Return (rp_id, origin) for a ceremony.
+
+    WebAuthn requires rp_id to equal the page's host and the verified origin to
+    equal the page's origin. We read these from the Origin header the browser
+    sends, falling back to env overrides, then localhost.
+    """
+    origin = ""
+    if request is not None:
+        origin = request.headers.get("origin") or ""
+        if not origin:
+            referer = request.headers.get("referer") or ""
+            if referer:
+                p = urlparse(referer)
+                if p.scheme and p.netloc:
+                    origin = f"{p.scheme}://{p.netloc}"
+    origin = origin or RP_ORIGIN_ENV or "http://localhost:3000"
+    host = urlparse(origin).hostname or RP_ID_ENV or "localhost"
+    rp_id = RP_ID_ENV or host
+    return rp_id, origin
+
 
 # ─── In-flight WebAuthn challenges ────────────────────────────────────────────
 # Ceremonies last seconds; a tiny in-memory store keyed by a state nonce the
 # client echoes back is plenty for a single-instance, single-user deployment.
-_challenges: dict[str, tuple[bytes, float]] = {}
+# We stash the rp_id + origin used at "begin" so "complete" verifies against the
+# exact same values the browser saw.
+_challenges: dict[str, tuple[bytes, str, str, float]] = {}
 _CHALLENGE_TTL = 300  # seconds
 
 
-def _stash_challenge(challenge: bytes) -> str:
+def _stash_challenge(challenge: bytes, rp_id: str, origin: str) -> str:
     _gc_challenges()
     state = secrets.token_urlsafe(16)
-    _challenges[state] = (challenge, time.time() + _CHALLENGE_TTL)
+    _challenges[state] = (challenge, rp_id, origin, time.time() + _CHALLENGE_TTL)
     return state
 
 
-def _take_challenge(state: str) -> bytes:
+def _take_challenge(state: str) -> tuple[bytes, str, str]:
     _gc_challenges()
     entry = _challenges.pop(state, None)
     if not entry:
         raise HTTPException(status_code=400, detail="Challenge expired — please retry.")
-    return entry[0]
+    challenge, rp_id, origin, _exp = entry
+    return challenge, rp_id, origin
 
 
 def _gc_challenges() -> None:
     now = time.time()
-    for k in [k for k, (_, exp) in _challenges.items() if exp < now]:
+    for k in [k for k, v in _challenges.items() if v[3] < now]:
         _challenges.pop(k, None)
 
 
@@ -228,7 +258,7 @@ def login_totp(db: Session, code: str) -> str:
 
 
 # ─── WebAuthn (biometric passkey) ─────────────────────────────────────────────
-def begin_passkey_registration(db: Session) -> dict:
+def begin_passkey_registration(db: Session, request: Optional[Request] = None) -> dict:
     """Registration options for enrolling a new platform passkey."""
     owner = get_owner(db)
     # Ensure an owner exists so the first passkey alone can configure the app.
@@ -238,13 +268,14 @@ def begin_passkey_registration(db: Session) -> dict:
         db.commit()
         db.refresh(owner)
 
+    rp_id, origin = rp_params_from_request(request)
     existing = db.query(WebAuthnCredentialModel).all()
     exclude = [
         PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
         for c in existing
     ]
     options = generate_registration_options(
-        rp_id=RP_ID,
+        rp_id=rp_id,
         rp_name=RP_NAME,
         user_id=owner.id.encode(),
         user_name="owner",
@@ -255,19 +286,19 @@ def begin_passkey_registration(db: Session) -> dict:
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
     )
-    state = _stash_challenge(options.challenge)
+    state = _stash_challenge(options.challenge, rp_id, origin)
     return {"state": state, "options": options_to_json(options)}
 
 
 def complete_passkey_registration(
     db: Session, state: str, credential: dict, nickname: str = "Passkey"
 ) -> str:
-    challenge = _take_challenge(state)
+    challenge, rp_id, origin = _take_challenge(state)
     verification = verify_registration_response(
         credential=credential,
         expected_challenge=challenge,
-        expected_origin=RP_ORIGIN,
-        expected_rp_id=RP_ID,
+        expected_origin=origin,
+        expected_rp_id=rp_id,
         require_user_verification=False,
     )
     response = credential.get("response") or {}
@@ -283,25 +314,26 @@ def complete_passkey_registration(
     return create_session(db)
 
 
-def begin_passkey_login(db: Session) -> dict:
+def begin_passkey_login(db: Session, request: Optional[Request] = None) -> dict:
     creds = db.query(WebAuthnCredentialModel).all()
     if not creds:
         raise HTTPException(status_code=400, detail="No passkey enrolled.")
+    rp_id, origin = rp_params_from_request(request)
     allow = [
         PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
         for c in creds
     ]
     options = generate_authentication_options(
-        rp_id=RP_ID,
+        rp_id=rp_id,
         allow_credentials=allow,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
-    state = _stash_challenge(options.challenge)
+    state = _stash_challenge(options.challenge, rp_id, origin)
     return {"state": state, "options": options_to_json(options)}
 
 
 def complete_passkey_login(db: Session, state: str, credential: dict) -> str:
-    challenge = _take_challenge(state)
+    challenge, rp_id, origin = _take_challenge(state)
     raw_id = credential.get("id") or credential.get("rawId")
     row = (
         db.query(WebAuthnCredentialModel)
@@ -313,8 +345,8 @@ def complete_passkey_login(db: Session, state: str, credential: dict) -> str:
     verification = verify_authentication_response(
         credential=credential,
         expected_challenge=challenge,
-        expected_rp_id=RP_ID,
-        expected_origin=RP_ORIGIN,
+        expected_rp_id=rp_id,
+        expected_origin=origin,
         credential_public_key=row.public_key,
         credential_current_sign_count=row.sign_count,
         require_user_verification=False,
