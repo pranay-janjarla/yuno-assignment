@@ -176,9 +176,9 @@ def setup_totp_verify(body: TotpCodeRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/setup/passkey/begin")
-def setup_passkey_begin(db: Session = Depends(get_db)):
+def setup_passkey_begin(request: Request, db: Session = Depends(get_db)):
     _guard_setup(db)
-    return auth.begin_passkey_registration(db)
+    return auth.begin_passkey_registration(db, request)
 
 
 @app.post("/auth/setup/passkey/complete")
@@ -189,8 +189,8 @@ def setup_passkey_complete(body: PasskeyCompleteRequest, db: Session = Depends(g
 
 # Login — only once configured
 @app.post("/auth/login/passkey/begin")
-def login_passkey_begin(db: Session = Depends(get_db)):
-    return auth.begin_passkey_login(db)
+def login_passkey_begin(request: Request, db: Session = Depends(get_db)):
+    return auth.begin_passkey_login(db, request)
 
 
 @app.post("/auth/login/passkey/complete")
@@ -210,8 +210,8 @@ def list_passkeys(db: Session = Depends(get_db), _: bool = Depends(require_sessi
 
 
 @app.post("/auth/passkey/begin")
-def add_passkey_begin(db: Session = Depends(get_db), _: bool = Depends(require_session)):
-    return auth.begin_passkey_registration(db)
+def add_passkey_begin(request: Request, db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    return auth.begin_passkey_registration(db, request)
 
 
 @app.post("/auth/passkey/complete")
