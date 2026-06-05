@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import "./globals.css"
 import Link from "next/link"
+import AuthGate from "./AuthGate"
 
 export const metadata: Metadata = {
   title: "Yuno Agent Platform",
@@ -11,6 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="bg-[#F7F7F9] flex flex-col h-screen overflow-hidden font-sans">
+        <AuthGate>
         <nav className="bg-white border-b border-[#E8E8EC] px-5 flex items-center gap-1 h-[54px] flex-shrink-0">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 mr-4">
@@ -73,6 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="flex-1 overflow-auto">
           {children}
         </main>
+        </AuthGate>
       </body>
     </html>
   )

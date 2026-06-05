@@ -23,6 +23,8 @@ import httpx
 from database import init_db, get_db, SessionLocal, AgentModel, WorkflowModel, WorkflowRunModel, RunEventModel, UserCredentialModel
 from agent_factory import generate_agent_config
 from agent_runner import run_agent_task, run_conversation_turn
+import auth
+from auth import require_session, require_session_or_service
 
 # ─── In-memory run event bus ─────────────────────────────────────────────────
 # Holds events for in-flight runs; flushed to DB on completion.
@@ -124,6 +126,106 @@ def root():
     return {"status": "ok", "service": "Agent Platform API", "docs": "/docs"}
 
 
+# ─── Auth (passwordless: biometric passkey + authenticator TOTP) ──────────────
+
+class TotpCodeRequest(BaseModel):
+    code: str
+
+
+class PasskeyCompleteRequest(BaseModel):
+    state: str
+    credential: dict
+    nickname: Optional[str] = None
+
+
+def _guard_setup(db: Session):
+    """Setup routes are usable only until the app is configured (bootstrap once)."""
+    if auth.is_configured(db):
+        raise HTTPException(403, "Already configured. Use the login endpoints.")
+
+
+@app.get("/auth/status")
+def auth_status(db: Session = Depends(get_db)):
+    return auth.auth_status(db)
+
+
+@app.get("/auth/me")
+def auth_me(_: bool = Depends(require_session)):
+    return {"ok": True}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    header = request.headers.get("Authorization", "")
+    token = header[7:] if header.lower().startswith("bearer ") else ""
+    auth.delete_session(db, token)
+    return {"ok": True}
+
+
+# Setup (bootstrap) — disabled once configured
+@app.post("/auth/setup/totp/begin")
+def setup_totp_begin(db: Session = Depends(get_db)):
+    _guard_setup(db)
+    return auth.begin_totp_setup(db)
+
+
+@app.post("/auth/setup/totp/verify")
+def setup_totp_verify(body: TotpCodeRequest, db: Session = Depends(get_db)):
+    _guard_setup(db)
+    return {"token": auth.verify_totp_setup(db, body.code)}
+
+
+@app.post("/auth/setup/passkey/begin")
+def setup_passkey_begin(db: Session = Depends(get_db)):
+    _guard_setup(db)
+    return auth.begin_passkey_registration(db)
+
+
+@app.post("/auth/setup/passkey/complete")
+def setup_passkey_complete(body: PasskeyCompleteRequest, db: Session = Depends(get_db)):
+    _guard_setup(db)
+    return {"token": auth.complete_passkey_registration(db, body.state, body.credential, body.nickname or "Passkey")}
+
+
+# Login — only once configured
+@app.post("/auth/login/passkey/begin")
+def login_passkey_begin(db: Session = Depends(get_db)):
+    return auth.begin_passkey_login(db)
+
+
+@app.post("/auth/login/passkey/complete")
+def login_passkey_complete(body: PasskeyCompleteRequest, db: Session = Depends(get_db)):
+    return {"token": auth.complete_passkey_login(db, body.state, body.credential)}
+
+
+@app.post("/auth/login/totp")
+def login_totp(body: TotpCodeRequest, db: Session = Depends(get_db)):
+    return {"token": auth.login_totp(db, body.code)}
+
+
+# Manage additional passkeys (logged-in)
+@app.get("/auth/passkeys")
+def list_passkeys(db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    return auth.list_passkeys(db)
+
+
+@app.post("/auth/passkey/begin")
+def add_passkey_begin(db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    return auth.begin_passkey_registration(db)
+
+
+@app.post("/auth/passkey/complete")
+def add_passkey_complete(body: PasskeyCompleteRequest, db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    auth.complete_passkey_registration(db, body.state, body.credential, body.nickname or "Passkey")
+    return {"ok": True}
+
+
+@app.delete("/auth/passkeys/{passkey_id}")
+def remove_passkey(passkey_id: str, db: Session = Depends(get_db), _: bool = Depends(require_session)):
+    auth.delete_passkey(db, passkey_id)
+    return {"ok": True}
+
+
 # ─── Schemas ─────────────────────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -173,7 +275,7 @@ class WorkflowChatRequest(BaseModel):
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
-@app.post("/api/agents/generate")
+@app.post("/api/agents/generate", dependencies=[Depends(require_session)])
 async def generate_config(body: GenerateRequest):
     """
     Step 1: User provides a description → Claude returns a rich agent config JSON.
@@ -192,7 +294,7 @@ async def generate_config(body: GenerateRequest):
     return config
 
 
-@app.post("/api/agents", status_code=201)
+@app.post("/api/agents", status_code=201, dependencies=[Depends(require_session)])
 def create_agent(body: CreateAgentRequest, db: Session = Depends(get_db)):
     """Step 2: User confirms the config → agent is saved to DB."""
     existing = db.query(AgentModel).filter(AgentModel.name == body.name).first()
@@ -214,19 +316,19 @@ def create_agent(body: CreateAgentRequest, db: Session = Depends(get_db)):
     return _agent_to_dict(agent)
 
 
-@app.get("/api/agents")
+@app.get("/api/agents", dependencies=[Depends(require_session_or_service)])
 def list_agents(db: Session = Depends(get_db)):
     agents = db.query(AgentModel).order_by(AgentModel.created_at.desc()).all()
     return [_agent_to_dict(a) for a in agents]
 
 
-@app.get("/api/agents/{agent_id}")
+@app.get("/api/agents/{agent_id}", dependencies=[Depends(require_session_or_service)])
 def get_agent(agent_id: str, db: Session = Depends(get_db)):
     agent = _get_or_404(db, agent_id)
     return _agent_to_dict(agent)
 
 
-@app.patch("/api/agents/{agent_id}")
+@app.patch("/api/agents/{agent_id}", dependencies=[Depends(require_session)])
 def patch_agent(agent_id: str, body: PatchAgentRequest, db: Session = Depends(get_db)):
     agent = _get_or_404(db, agent_id)
     if body.tools is not None:
@@ -240,7 +342,7 @@ def patch_agent(agent_id: str, body: PatchAgentRequest, db: Session = Depends(ge
     return _agent_to_dict(agent)
 
 
-@app.delete("/api/agents/{agent_id}")
+@app.delete("/api/agents/{agent_id}", dependencies=[Depends(require_session)])
 def delete_agent(agent_id: str, db: Session = Depends(get_db)):
     agent = _get_or_404(db, agent_id)
     db.delete(agent)
@@ -248,7 +350,7 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)):
     return {"deleted": agent_id}
 
 
-@app.post("/api/agents/{agent_id}/run")
+@app.post("/api/agents/{agent_id}/run", dependencies=[Depends(require_session)])
 async def run_agent(agent_id: str, body: RunTaskRequest, db: Session = Depends(get_db)):
     """
     Step 3: User gives the agent a task → streams back execution events via SSE.
@@ -270,7 +372,7 @@ async def run_agent(agent_id: str, body: RunTaskRequest, db: Session = Depends(g
     )
 
 
-@app.post("/api/agents/{agent_id}/chat")
+@app.post("/api/agents/{agent_id}/chat", dependencies=[Depends(require_session_or_service)])
 def chat_agent(agent_id: str, body: AgentChatRequest, db: Session = Depends(get_db)):
     """Conversational turn for Telegram bot — maintains history across calls."""
     agent = _get_or_404(db, agent_id)
@@ -284,7 +386,7 @@ def chat_agent(agent_id: str, body: AgentChatRequest, db: Session = Depends(get_
     return {"response": response, "history": updated_history}
 
 
-@app.post("/api/workflows/{wf_id}/chat")
+@app.post("/api/workflows/{wf_id}/chat", dependencies=[Depends(require_session_or_service)])
 async def chat_workflow(wf_id: str, body: WorkflowChatRequest, db: Session = Depends(get_db)):
     """Single-turn workflow execution for Telegram bot — creates a tracked run and returns final answer."""
     wf = _get_wf_or_404(db, wf_id)
@@ -318,7 +420,7 @@ async def chat_workflow(wf_id: str, body: WorkflowChatRequest, db: Session = Dep
     return {"response": final_answer or "Workflow completed.", "run_id": run_id, "delivered": delivered}
 
 
-@app.get("/api/tools")
+@app.get("/api/tools", dependencies=[Depends(require_session)])
 def list_tools():
     """Return all available tools the AI can assign to agents."""
     from tools import TOOL_CATALOG
@@ -386,7 +488,7 @@ def _mask(value: str) -> str:
     return value[:4] + "••••" + value[-4:]
 
 
-@app.get("/api/credentials")
+@app.get("/api/credentials", dependencies=[Depends(require_session)])
 def get_credentials(db: Session = Depends(get_db)):
     env = _read_env_file()
     result = []
@@ -423,7 +525,7 @@ class CredentialUpdate(BaseModel):
     value: str
 
 
-@app.patch("/api/credentials", dependencies=[Depends(require_api_key)])
+@app.patch("/api/credentials", dependencies=[Depends(require_session)])
 def update_credentials(updates: list[CredentialUpdate], db: Session = Depends(get_db)):
     system_keys = {d["key"] for d in CREDENTIAL_DEFS}
     user_keys = {uc.key for uc in db.query(UserCredentialModel).all()}
@@ -454,7 +556,7 @@ class CreateCustomCredentialRequest(BaseModel):
     secret: bool = True
 
 
-@app.post("/api/credentials/custom", status_code=201, dependencies=[Depends(require_api_key)])
+@app.post("/api/credentials/custom", status_code=201, dependencies=[Depends(require_session)])
 def create_custom_credential(body: CreateCustomCredentialRequest, db: Session = Depends(get_db)):
     key = body.key or body.label.upper().replace(" ", "_").replace("-", "_")
     # Ensure key doesn't clash with system credentials
@@ -472,7 +574,7 @@ def create_custom_credential(body: CreateCustomCredentialRequest, db: Session = 
     return {"key": key, "label": body.label, "group": body.group, "secret": body.secret, "is_set": True}
 
 
-@app.delete("/api/credentials/custom/{key}", dependencies=[Depends(require_api_key)])
+@app.delete("/api/credentials/custom/{key}", dependencies=[Depends(require_session)])
 def delete_custom_credential(key: str, db: Session = Depends(get_db)):
     uc = db.query(UserCredentialModel).filter(UserCredentialModel.key == key).first()
     if not uc:
@@ -485,7 +587,7 @@ def delete_custom_credential(key: str, db: Session = Depends(get_db)):
 
 # ─── Workflow routes ──────────────────────────────────────────────────────────
 
-@app.post("/api/workflows", status_code=201)
+@app.post("/api/workflows", status_code=201, dependencies=[Depends(require_session)])
 def create_workflow(body: WorkflowCreateRequest, db: Session = Depends(get_db)):
     wf = WorkflowModel(
         id=str(uuid.uuid4()),
@@ -499,18 +601,18 @@ def create_workflow(body: WorkflowCreateRequest, db: Session = Depends(get_db)):
     return _wf_to_dict(wf)
 
 
-@app.get("/api/workflows")
+@app.get("/api/workflows", dependencies=[Depends(require_session_or_service)])
 def list_workflows(db: Session = Depends(get_db)):
     wfs = db.query(WorkflowModel).order_by(WorkflowModel.created_at.desc()).all()
     return [_wf_to_dict(w) for w in wfs]
 
 
-@app.get("/api/workflows/{wf_id}")
+@app.get("/api/workflows/{wf_id}", dependencies=[Depends(require_session_or_service)])
 def get_workflow(wf_id: str, db: Session = Depends(get_db)):
     return _wf_to_dict(_get_wf_or_404(db, wf_id))
 
 
-@app.patch("/api/workflows/{wf_id}")
+@app.patch("/api/workflows/{wf_id}", dependencies=[Depends(require_session)])
 def patch_workflow(wf_id: str, body: WorkflowPatchRequest, db: Session = Depends(get_db)):
     wf = _get_wf_or_404(db, wf_id)
     if body.name is not None:
@@ -524,7 +626,7 @@ def patch_workflow(wf_id: str, body: WorkflowPatchRequest, db: Session = Depends
     return _wf_to_dict(wf)
 
 
-@app.delete("/api/workflows/{wf_id}")
+@app.delete("/api/workflows/{wf_id}", dependencies=[Depends(require_session)])
 def delete_workflow(wf_id: str, db: Session = Depends(get_db)):
     wf = _get_wf_or_404(db, wf_id)
     db.delete(wf)
@@ -532,7 +634,7 @@ def delete_workflow(wf_id: str, db: Session = Depends(get_db)):
     return {"deleted": wf_id}
 
 
-@app.post("/api/workflows/{wf_id}/run")
+@app.post("/api/workflows/{wf_id}/run", dependencies=[Depends(require_session)])
 async def run_workflow(wf_id: str, body: RunTaskRequest, db: Session = Depends(get_db)):
     wf = _get_wf_or_404(db, wf_id)
     agents = {a.id: a for a in db.query(AgentModel).all()}
@@ -593,13 +695,13 @@ async def webhook_trigger(wf_id: str, request: Request, db: Session = Depends(ge
 
 # ─── Run monitoring endpoints ─────────────────────────────────────────────────
 
-@app.get("/api/runs")
+@app.get("/api/runs", dependencies=[Depends(require_session)])
 def list_runs(db: Session = Depends(get_db)):
     runs = db.query(WorkflowRunModel).order_by(WorkflowRunModel.created_at.desc()).limit(100).all()
     return [_run_to_dict(r) for r in runs]
 
 
-@app.get("/api/runs/{run_id}")
+@app.get("/api/runs/{run_id}", dependencies=[Depends(require_session)])
 def get_run(run_id: str, db: Session = Depends(get_db)):
     run = db.query(WorkflowRunModel).filter(WorkflowRunModel.id == run_id).first()
     if not run:
@@ -621,8 +723,11 @@ def get_run(run_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/runs/{run_id}/stream")
-async def stream_run_events(run_id: str, db: Session = Depends(get_db)):
-    """SSE stream for a run. Replays history then sends live events."""
+async def stream_run_events(run_id: str, token: str = "", db: Session = Depends(get_db)):
+    """SSE stream for a run. Replays history then sends live events.
+    Auth via ?token= query param because EventSource can't set headers."""
+    if not auth.validate_token(db, token):
+        raise HTTPException(401, "Authentication required.")
     run = db.query(WorkflowRunModel).filter(WorkflowRunModel.id == run_id).first()
     if not run:
         raise HTTPException(404, "Run not found")
